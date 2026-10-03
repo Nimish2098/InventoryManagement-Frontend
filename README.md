@@ -10,7 +10,7 @@ cp .env.example .env.local
 npm run dev
 ```
 
-For local development, set `VITE_API_PROXY_TARGET` in `.env.local` to the backend origin (defaults to `http://localhost:8080`); Vite proxies `/api/*` to the backend without requiring development CORS configuration. In production, set `VITE_API_BASE_URL` if the backend is on a separate origin, and configure CORS there or route both through the same origin. The frontend calls the backend's `/product`, `/warehouse`, `/inventory`, `/customer`, and `/order` endpoints.
+For local development, set `VITE_API_PROXY_TARGET` in `.env.local` to the backend origin (defaults to `http://localhost:8080`); Vite proxies `/api/*` to the backend and removes the browser's `Origin` header, avoiding development CORS checks. In production, set `VITE_API_BASE_URL` if the backend is on a separate origin, and configure CORS there or route both through the same origin. The frontend calls the backend's `/product`, `/warehouse`, `/inventory`, `/customer`, and `/order` endpoints.
 
 ## Included screens
 
