@@ -23,4 +23,8 @@ For local development, set `VITE_API_PROXY_TARGET` in `.env.local` to the backen
 - Order creation with multiple line items, status filters, and pending cancellation
 - Product/warehouse movement history
 
+## Preview 
+
+![Alt text](src\assets\ezgif.com-gif-maker.gif)
+
 The API layer is in `src/api.ts`; request and response payloads follow the backend contract, including its `isActive` and `movementType` camelCase fields.
