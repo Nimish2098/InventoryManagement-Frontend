@@ -27,4 +27,19 @@ For local development, set `VITE_API_PROXY_TARGET` in `.env.local` to the backen
 
 ![Alt text](src\assets\ezgif.com-gif-maker.gif)
 
+## Production deployment
+
+The app ships as a static SPA and is ready to deploy behind any HTTP server. The repository includes a production Docker image that builds the frontend, serves it with Nginx, and falls back to `index.html` for client-side routes.
+
+```sh
+docker build -t northstock-frontend .
+docker run --rm -p 8080:80 northstock-frontend
+```
+
+For a hosted build, set the frontend API URL at build time:
+
+```sh
+VITE_API_BASE_URL=https://api.example.com npm run build
+```
+
 The API layer is in `src/api.ts`; request and response payloads follow the backend contract, including its `isActive` and `movementType` camelCase fields.
