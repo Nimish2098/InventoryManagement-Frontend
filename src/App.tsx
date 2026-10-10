@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
-import { BrowserRouter, NavLink, Route, Routes, useLocation } from 'react-router-dom'
-import { api, type Customer, type InventoryItem, type Movement, type Order, type Product, type Warehouse } from './api'
+import { BrowserRouter, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { api, getAccessToken, setAccessToken, setUnauthorizedHandler, type Customer, type InventoryItem, type Movement, type Order, type Product, type User, type Warehouse } from './api'
 import './App.css'
 
 type ModalKind = 'product' | 'warehouse' | 'customer' | 'adjust' | 'transfer' | 'order'
@@ -8,6 +8,119 @@ type DataState<T> = { data: T; loading: boolean; error: string; reload: () => vo
 const TODAY_LABEL = new Intl.DateTimeFormat('en', { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date())
 type Theme = 'light' | 'dark'
 const ThemeContext = createContext<{ theme: Theme; toggleTheme: () => void } | null>(null)
+type AuthContextValue = {
+  token: string | null
+  user: User | null
+  loading: boolean
+  error: string
+  signIn: (token: string) => Promise<void>
+  signOut: () => void
+}
+const AuthContext = createContext<AuthContextValue | null>(null)
+
+function tokenExpiration(token: string) {
+  try {
+    const payload = token.split('.')[1]
+    if (!payload) return null
+    const decoded = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/'))) as { exp?: number }
+    return typeof decoded.exp === 'number' ? decoded.exp * 1000 : null
+  } catch {
+    return null
+  }
+}
+
+function AuthProvider({ children }: { children: ReactNode }) {
+  const [token, setToken] = useState(() => getAccessToken())
+  const [user, setUser] = useState<User | null>(null)
+  const [loading, setLoading] = useState(() => Boolean(getAccessToken()))
+  const [error, setError] = useState('')
+
+  const signOut = useCallback(() => {
+    setAccessToken(null)
+    setToken(null)
+    setUser(null)
+    setLoading(false)
+    setError('')
+  }, [])
+
+  const expireSession = useCallback(() => {
+    setAccessToken(null)
+    setToken(null)
+    setUser(null)
+    setLoading(false)
+    setError('Your session has expired. Please sign in again.')
+  }, [])
+
+  const loadUser = useCallback(async (accessToken: string) => {
+    setLoading(true)
+    setError('')
+    try {
+      const currentUser = await api.users.me()
+      if (getAccessToken() === accessToken) setUser(currentUser)
+    } catch (cause) {
+      if (getAccessToken() === accessToken) {
+        setError(cause instanceof Error ? cause.message : 'Unable to load your account')
+      }
+      throw cause
+    } finally {
+      if (getAccessToken() === accessToken) setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    setUnauthorizedHandler(expireSession)
+    return () => setUnauthorizedHandler(null)
+  }, [expireSession])
+
+  useEffect(() => {
+    const existingToken = getAccessToken()
+    if (!existingToken) {
+      setLoading(false)
+      return
+    }
+    const expiresAt = tokenExpiration(existingToken)
+    if (expiresAt !== null && expiresAt <= Date.now()) {
+      expireSession()
+      return
+    }
+    void loadUser(existingToken).catch(() => undefined)
+  }, [loadUser, expireSession])
+
+  useEffect(() => {
+    if (!token) return
+    const expiresAt = tokenExpiration(token)
+    if (expiresAt === null) return
+    const remaining = expiresAt - Date.now()
+    if (remaining <= 0) {
+      expireSession()
+      return
+    }
+    let timer = 0
+    const checkExpiry = () => {
+      const timeLeft = expiresAt - Date.now()
+      if (timeLeft <= 0) expireSession()
+      else timer = window.setTimeout(checkExpiry, Math.min(timeLeft, 2_147_000_000))
+    }
+    timer = window.setTimeout(checkExpiry, Math.min(remaining, 2_147_000_000))
+    return () => window.clearTimeout(timer)
+  }, [token, expireSession])
+
+  const signIn = useCallback(async (newToken: string) => {
+    setAccessToken(newToken)
+    setToken(newToken)
+    setUser(null)
+    await loadUser(newToken)
+  }, [loadUser])
+
+  const value = useMemo(() => ({ token, user, loading, error, signIn, signOut }), [token, user, loading, error, signIn, signOut])
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+}
+
+function useAuth() {
+  const context = useContext(AuthContext)
+  if (!context) throw new Error('Authentication must be used within AuthProvider')
+  return context
+}
 
 function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useState<Theme>(() => localStorage.getItem('northstock-theme') === 'dark' ? 'dark' : 'light')
@@ -111,6 +224,7 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
     moon: <path d="M20.8 13a8.5 8.5 0 0 1-9.8-9.8A9 9 0 1 0 20.8 13Z" />,
     sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" /></>,
+    logout: <><path d="M10 17l5-5-5-5M15 12H3" /><path d="M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6" /></>,
   }
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{paths[name] ?? paths.grid}</svg>
 }
@@ -124,12 +238,12 @@ function ThemeToggle({ compact = false }: { compact?: boolean }) {
 function LandingPage() {
   return <div className="landing-page" id="top">
     <header className="landing-header">
-      <NavLink className="landing-brand" to="/" aria-label="Northstock home">
-        <span className="brand-mark">N</span>
-        <span className="brand-name">NORTH<span>STOCK</span></span>
+      <NavLink className="landing-brand" to="/" aria-label="ApexStock home">
+        <span className="brand-mark">A</span>
+        <span className="brand-name">APEX<span>STOCK</span></span>
       </NavLink>
       <nav className="landing-nav" aria-label="Landing page navigation">
-        <a href="#why-northstock">Why Northstock</a>
+        <a href="#why-apexstock">Why ApexStock</a>
         <a href="#how-it-works">How it works</a>
       </nav>
       <div className="landing-header-actions"><ThemeToggle compact /><NavLink className="landing-signin" to="/dashboard">Open app <Icon name="arrow" size={15} /></NavLink></div>
@@ -160,9 +274,9 @@ function LandingPage() {
         <div className="landing-scroll"><span>SCROLL TO EXPLORE</span><i /></div>
       </section>
 
-      <section className="landing-manifesto" id="why-northstock">
+      <section className="landing-manifesto" id="why-apexstock">
         <div className="landing-section-label"><span>01</span> A BETTER KIND OF BUSY</div>
-        <div className="manifesto-copy"><h2>Operations have enough moving parts.<br /><span>Your inventory shouldn't be one of them.</span></h2><p>Northstock brings the everyday essentials into focus. Keep the details close, the next step obvious, and your team moving in the same direction.</p></div>
+        <div className="manifesto-copy"><h2>Operations have enough moving parts.<br /><span>Your inventory shouldn't be one of them.</span></h2><p>ApexStock brings the everyday essentials into focus. Keep the details close, the next step obvious, and your team moving in the same direction.</p></div>
         <NavLink className="manifesto-link" to="/dashboard">Get to know your stock <Icon name="arrow" size={16} /></NavLink>
       </section>
 
@@ -184,12 +298,84 @@ function LandingPage() {
       </section>
     </main>
 
-    <footer className="landing-footer"><NavLink className="landing-brand" to="/"><span className="brand-mark">N</span><span className="brand-name">NORTH<span>STOCK</span></span></NavLink><span>INVENTORY, IN GOOD ORDER.</span><a href="#top" onClick={(event) => { event.preventDefault(); window.scrollTo({ top: 0, behavior: 'smooth' }) }}>BACK TO THE TOP ↑</a></footer>
+    <footer className="landing-footer"><NavLink className="landing-brand" to="/"><span className="brand-mark">A</span><span className="brand-name">APEX<span>STOCK</span></span></NavLink><span>INVENTORY, IN GOOD ORDER.</span><a href="#top" onClick={(event) => { event.preventDefault(); window.scrollTo({ top: 0, behavior: 'smooth' }) }}>BACK TO THE TOP ↑</a></footer>
   </div>
+}
+
+function AuthPage({ mode }: { mode: 'login' | 'register' }) {
+  const { signIn, error: sessionError } = useAuth()
+  const location = useLocation()
+  const navigate = useNavigate()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const from = (location.state as { from?: { pathname?: string; search?: string; hash?: string } } | null)?.from
+  const destination = from?.pathname ? `${from.pathname}${from.search ?? ''}${from.hash ?? ''}` : '/dashboard'
+  const notice = (location.state as { notice?: string } | null)?.notice ?? ''
+  const isRegister = mode === 'register'
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    const values = new FormData(event.currentTarget)
+    const email = String(values.get('email') ?? '').trim()
+    const password = String(values.get('password') ?? '')
+
+    try {
+      if (isRegister) {
+        const response = await api.auth.register({
+          name: String(values.get('name') ?? '').trim(),
+          email,
+          password,
+        })
+        const token = response?.access_token ?? response?.token
+        if (token) {
+          await signIn(token)
+          navigate(destination, { replace: true })
+        } else {
+          navigate('/login', { replace: true, state: { notice: 'Your account is ready. Sign in to continue.' } })
+        }
+      } else {
+        const response = await api.auth.login({ email, password })
+        const token = response.access_token ?? response.token
+        if (!token) throw new Error('The sign-in response did not include an access token.')
+        await signIn(token)
+        navigate(destination, { replace: true })
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Unable to complete your request')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return <main className="auth-page">
+    <header className="auth-header">
+      <NavLink className="landing-brand" to="/" aria-label="ApexStock home"><span className="brand-mark">A</span><span className="brand-name">APEX<span>STOCK</span></span></NavLink>
+      <ThemeToggle compact />
+    </header>
+    <section className="auth-card">
+      <div className="landing-eyebrow"><span /> INVENTORY, IN GOOD ORDER.</div>
+      <h1>{isRegister ? 'A clearer start.' : 'Welcome back.'}</h1>
+      <p>{isRegister ? 'Create your account and get your inventory in order.' : 'Sign in to pick up where your workspace left off.'}</p>
+      {notice && <div className="auth-notice" role="status">{notice}</div>}
+      {(error || sessionError) && <div className="auth-error" role="alert">{error || sessionError}</div>}
+      <form className="auth-form" onSubmit={(event) => void submit(event)}>
+        {isRegister && <label>YOUR NAME<input name="name" type="text" autoComplete="name" required /></label>}
+        <label>EMAIL ADDRESS<input name="email" type="email" autoComplete="email" required /></label>
+        <label>PASSWORD<input name="password" type="password" autoComplete={isRegister ? 'new-password' : 'current-password'} required /></label>
+        <button className="auth-submit" type="submit" disabled={busy}>{busy ? 'Please wait…' : isRegister ? 'Create account' : 'Sign in'}<Icon name="arrow" size={16} /></button>
+      </form>
+      <div className="auth-switch">{isRegister ? 'Already have an account?' : 'New to ApexStock?'} <NavLink to={isRegister ? '/login' : '/register'}>{isRegister ? 'Sign in' : 'Create an account'}</NavLink></div>
+    </section>
+    <footer className="auth-footer">APEXSTOCK <span>•</span> INVENTORY, IN GOOD ORDER.</footer>
+  </main>
 }
 
 function AppShell() {
   const location = useLocation()
+  const { token, user, loading, signOut, error: sessionError } = useAuth()
+  const navigate = useNavigate()
   const [modal, setModal] = useState<ModalKind | null>(null)
   const [mobileNav, setMobileNav] = useState(false)
   const [toast, setToast] = useState('')
@@ -215,20 +401,22 @@ function AppShell() {
 
   const refreshKey = useRefreshKey()
 
+  if (path === '/login' || path === '/register') return <AuthPage key={path} mode={path === '/register' ? 'register' : 'login'} />
   if (path === '/') return <LandingPage />
+  if (loading) return <div className="auth-loading"><span className="spinner" />Checking your session…</div>
+  if (!token) return <Navigate to="/login" replace state={{ from: location }} />
 
   return (
     <div className="app-shell">
       <aside className={`sidebar ${mobileNav ? 'sidebar-open' : ''}`}>
         <NavLink className="brand" to="/" onClick={() => setMobileNav(false)}>
-          <span className="brand-mark">N</span>
-          <span className="brand-name">NORTH<span>STOCK</span></span>
+          <span className="brand-mark">A</span>
+          <span className="brand-name">APEX<span>STOCK</span></span>
           <span className="brand-edition">INVENTORY OS</span>
         </NavLink>
         <div className="workspace-select">
-          <span className="workspace-avatar">W</span>
-          <span><strong>West & Co.</strong><small>Operations team</small></span>
-          <Icon name="down" size={15} />
+          <span className="workspace-avatar">{user?.name?.slice(0, 1).toUpperCase() ?? 'A'}</span>
+          <span><strong>{user?.name || 'Your account'}</strong><small>{user?.email || 'Signed in'}</small></span>
         </div>
         <nav className="side-nav" aria-label="Main navigation">
           {navGroups.map((group) => (
@@ -243,12 +431,12 @@ function AppShell() {
             </div>
           ))}
         </nav>
-            <div className="sidebar-bottom">
-              <div className="sidebar-note"><span className="status-pulse" />INVENTORY, IN GOOD ORDER</div>
+        <div className="sidebar-bottom">
+          <div className="sidebar-note"><span className="status-pulse" />INVENTORY, IN GOOD ORDER</div>
           <div className="profile">
-            <div className="profile-avatar">AM</div>
-            <div><strong>Alex Morgan</strong><small>Inventory manager</small></div>
-            <button className="icon-button" aria-label="Profile menu"><Icon name="menu" size={17} /></button>
+            <div className="profile-avatar">{user?.name?.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() ?? 'A'}</div>
+            <div><strong>{user?.name || 'Your account'}</strong><small>{user?.email || 'Account details unavailable'}</small></div>
+            <button className="icon-button" aria-label="Log out" title="Log out" onClick={() => { signOut(); navigate('/login', { replace: true }) }}><Icon name="logout" size={17} /></button>
           </div>
         </div>
       </aside>
@@ -261,8 +449,8 @@ function AppShell() {
             <span className="today-label">{TODAY_LABEL}</span>
             <ThemeToggle />
             <span className="topbar-divider" />
-            <button className="icon-button notification-button" aria-label="Notifications"><Icon name="alert" size={18} /><i /></button>
-            <div className="top-avatar">AM</div>
+            {sessionError && <span className="session-warning" role="status">{sessionError}</span>}
+            <div className="top-avatar">{user?.name?.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() ?? 'A'}</div>
           </div>
         </header>
         <div className="page-content">
@@ -278,7 +466,7 @@ function AppShell() {
             <Route path="*" element={<EmptyState title="This page isn't here" detail="Choose a destination from the navigation." />} />
           </Routes>
         </div>
-        <footer className="page-footer"><span>NORTHSTOCK <span className="footer-dot">•</span> INVENTORY, IN GOOD ORDER.</span><span>DESIGNED FOR THE EVERYDAY.</span></footer>
+        <footer className="page-footer"><span>APEXSTOCK <span className="footer-dot">•</span> INVENTORY, IN GOOD ORDER.</span><span>DESIGNED FOR THE EVERYDAY.</span></footer>
       </main>
       {modal && <ActionDialog kind={modal} onClose={() => setModal(null)} onSaved={afterSave} />}
       {toast && <div className="toast"><span className="toast-check"><Icon name="check" size={15} /></span>{toast}</div>}
@@ -373,7 +561,7 @@ function Dashboard({ onAction }: { onAction: (kind: ModalKind) => void }) {
       <div className="panel-heading"><div><div className="eyebrow">YOUR BUSINESS, IN MOTION</div><h2>Recent orders</h2></div><NavLink to="/orders" className="text-link">All orders <Icon name="arrow" size={15} /></NavLink></div>
       {orders.data.length ? <OrderTable orders={orders.data.slice(0, 5)} customers={customers.data} /> : !loading && !firstError ? <EmptyState title="A little quiet here" detail="New orders will show up here as they come in." /> : null}
     </section>
-    <div className="dashboard-bottom"><div className="quote-card"><span className="quote-mark">“</span><p>Good inventory isn't about having more.<br />It's about knowing what you have.</p><small>THE NORTHSTOCK PRINCIPLE <span>—</span> 01</small><div className="quote-orbit orbit-one" /><div className="quote-orbit orbit-two" /></div><div className="orders-mini panel"><div className="eyebrow">PENDING ORDERS</div><div className="mini-number">{orders.error ? '—' : orders.data.filter((order) => order.status === 'PENDING').length.toString().padStart(2, '0')}</div><div className="mini-copy">{orders.error ? 'Data unavailable' : 'Ready for your review'}</div><NavLink to="/orders" className="mini-link">Open order desk <Icon name="arrow" size={14} /></NavLink></div></div>
+    <div className="dashboard-bottom"><div className="quote-card"><span className="quote-mark">“</span><p>Good inventory isn't about having more.<br />It's about knowing what you have.</p><small>THE APEXSTOCK PRINCIPLE <span>—</span> 01</small><div className="quote-orbit orbit-one" /><div className="quote-orbit orbit-two" /></div><div className="orders-mini panel"><div className="eyebrow">PENDING ORDERS</div><div className="mini-number">{orders.error ? '—' : orders.data.filter((order) => order.status === 'PENDING').length.toString().padStart(2, '0')}</div><div className="mini-copy">{orders.error ? 'Data unavailable' : 'Ready for your review'}</div><NavLink to="/orders" className="mini-link">Open order desk <Icon name="arrow" size={14} /></NavLink></div></div>
   </>
 }
 
@@ -585,7 +773,7 @@ function ActionDialog({ kind, existing, onClose, onSaved }: { kind: ModalKind; e
   const field = (label: string, name: string, type = 'text', required = true, min?: number) => <label className="form-field"><span>{label}</span><input type={type} required={required} min={min} value={values[name] ?? ''} onChange={(event) => setValue(name, event.target.value)} /></label>
   const select = (label: string, name: string, options: Array<[string, string]>, placeholder: string) => <label className="form-field"><span>{label}</span><select required value={values[name] ?? ''} onChange={(event) => setValue(name, event.target.value)}><option value="">{placeholder}</option>{options.map(([value, text]) => <option key={value} value={value}>{text}</option>)}</select></label>
 
-  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div className="modal-heading"><div><div className="eyebrow">NORTHSTOCK / {kind.toUpperCase()}</div><h2 id="modal-title">{title}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close dialog"><Icon name="close" /></button></div>
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div className="modal-heading"><div><div className="eyebrow">APEXSTOCK / {kind.toUpperCase()}</div><h2 id="modal-title">{title}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close dialog"><Icon name="close" /></button></div>
     <form onSubmit={submit}><div className="modal-fields">
       {kind === 'product' && <>{field('PRODUCT NAME', 'name')}{field('SKU', 'sku')}{field('CATEGORY', 'category')}{field('REORDER LEVEL', 'reorder_level', 'number', true, 0)}</>}
       {kind === 'warehouse' && <>{field('WAREHOUSE NAME', 'name')}{field('LOCATION CODE', 'code')}{field('CAPACITY (UNITS)', 'capacity', 'number', true, 0)}{existing && select('STATUS', 'isActive', [['true', 'Active'], ['false', 'Inactive']], 'Choose status')}</>}
@@ -598,5 +786,5 @@ function ActionDialog({ kind, existing, onClose, onSaved }: { kind: ModalKind; e
 }
 
 export default function App() {
-  return <ThemeProvider><BrowserRouter><AppShell /></BrowserRouter></ThemeProvider>
+  return <ThemeProvider><BrowserRouter><AuthProvider><AppShell /></AuthProvider></BrowserRouter></ThemeProvider>
 }

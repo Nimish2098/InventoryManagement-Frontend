@@ -3,6 +3,32 @@ const API_BASE_URL = (
   (import.meta.env.DEV ? '' : 'http://localhost:8080')
 ).replace(/\/$/, '')
 const API_PREFIX = import.meta.env.DEV && !import.meta.env.VITE_API_BASE_URL ? '/api' : ''
+const ACCESS_TOKEN_KEY = 'northstock-access-token'
+
+export interface User {
+  name: string
+  email: string
+}
+
+export interface AuthTokenResponse {
+  access_token?: string
+  token?: string
+}
+
+let unauthorizedHandler: (() => void) | null = null
+
+export function getAccessToken() {
+  return localStorage.getItem(ACCESS_TOKEN_KEY)
+}
+
+export function setAccessToken(token: string | null) {
+  if (token) localStorage.setItem(ACCESS_TOKEN_KEY, token)
+  else localStorage.removeItem(ACCESS_TOKEN_KEY)
+}
+
+export function setUnauthorizedHandler(handler: (() => void) | null) {
+  unauthorizedHandler = handler
+}
 
 export interface Product {
   id: number
@@ -62,16 +88,22 @@ export interface Movement {
   quantity_change?: number
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, authenticated = true): Promise<T> {
+  const token = authenticated ? getAccessToken() : null
   const response = await fetch(`${API_BASE_URL}${API_PREFIX}${path}`, {
     ...init,
     headers: {
       ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...init?.headers,
     },
   })
 
   if (!response.ok) {
+    if (response.status === 401 && token && getAccessToken() === token) {
+      setAccessToken(null)
+      unauthorizedHandler?.()
+    }
     const body = await response.text()
     let message = body
     if (body) {
@@ -95,6 +127,15 @@ const json = (method: string, data?: unknown): RequestInit => ({
 })
 
 export const api = {
+  auth: {
+    login: (data: { email: string; password: string }) =>
+      request<AuthTokenResponse>('/auth/login', json('POST', data), false),
+    register: (data: { name: string; email: string; password: string }) =>
+      request<AuthTokenResponse>('/auth/register', json('POST', data), false),
+  },
+  users: {
+    me: () => request<User>('/users/me'),
+  },
   products: {
     getAll: () => request<Product[]>('/product'),
     getById: (id: number) => request<Product>(`/product/${id}`),
