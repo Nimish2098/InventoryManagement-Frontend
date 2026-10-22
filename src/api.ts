@@ -1,5 +1,5 @@
 const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL ?? 'https://inventory-management-n8sc.onrender.com/swagger-ui/index.html'
+  import.meta.env.VITE_API_BASE_URL ?? 'https://inventory-management-n8sc.onrender.com'
 ).replace(/\/$/, '')
 
 const API_PREFIX = '' // No extra prefix needed; paths match backend directly
