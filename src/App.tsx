@@ -1,6 +1,6 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode,} from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type ChangeEvent} from 'react'
 import { BrowserRouter, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
-import { api, getAccessToken, setAccessToken, setUnauthorizedHandler, type Customer, type InventoryItem, type Movement, type Order, type Product, type User, type Warehouse } from './api'
+import { api, getAccessToken, setAccessToken, setUnauthorizedHandler, type Customer, type InventoryItem,type InitialStockImportResponse, type Movement, type Order, type Product, type ProductImportResponse, type User, type Warehouse } from './api'
 import './App.css'
 
 type ModalKind = 'product' | 'warehouse' | 'customer' | 'adjust' | 'transfer' | 'order'
@@ -462,7 +462,7 @@ function AppShell() {
                     <Route path="/dashboard" element={<Dashboard key={refreshKey} onAction={setModal} />} />
             <Route path="/products" element={<Products key={refreshKey} onAction={setModal} onToast={setToast} />} />
             <Route path="/warehouses" element={<Warehouses key={refreshKey} onAction={setModal} onToast={setToast} />} />
-            <Route path="/inventory" element={<InventoryPage key={refreshKey} onAction={setModal} />} />
+            <Route path="/inventory" element={<InventoryPage key={refreshKey} onAction={setModal} onToast={setToast} />} />
             <Route path="/low-stock" element={<LowStockPage key={refreshKey} onAction={setModal} />} />
             <Route path="/customers" element={<CustomersPage key={refreshKey} onAction={setModal} onToast={setToast} />} />
             <Route path="/orders" element={<OrdersPage key={refreshKey} onAction={setModal} onToast={setToast} />} />
@@ -573,25 +573,298 @@ function SearchField({ value, onChange, placeholder = 'Search by name or SKU…'
   return <label className="search-field"><Icon name="search" size={17} /><input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /><kbd>⌘ K</kbd></label>
 }
 
-function Products({ onAction, onToast }: { onAction: (kind: ModalKind) => void; onToast: (message: string) => void }) {
+
+function Products({
+  onAction,
+  onToast,
+}: {
+  onAction: (kind: ModalKind) => void
+  onToast: (message: string) => void
+}) {
   const resource = useProducts()
   const [search, setSearch] = useState('')
   const [editing, setEditing] = useState<Product | null>(null)
-  const filtered = resource.data.filter((product) => `${product.name} ${product.sku} ${product.category}`.toLowerCase().includes(search.toLowerCase()))
-  const remove = async (product: Product) => {
-    if (!window.confirm(`Delete ${product.name}? This cannot be undone.`)) return
-    try { await api.products.delete(product.id); onToast('Product deleted'); resource.reload() }
-    catch (error) { onToast(error instanceof Error ? error.message : 'Could not delete product') }
+  const [importing, setImporting] = useState(false)
+  const [importResult, setImportResult] =
+    useState<ProductImportResponse | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const filtered = resource.data.filter((product) =>
+    `${product.name} ${product.sku} ${product.category}`
+      .toLowerCase()
+      .includes(search.toLowerCase()),
+  )
+
+  const importCsv = async (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+      onToast('Please select a CSV file')
+      event.target.value = ''
+      return
+    }
+
+    if (file.size === 0) {
+      onToast('The selected CSV file is empty')
+      event.target.value = ''
+      return
+    }
+
+    setImporting(true)
+    setImportResult(null)
+
+    try {
+      const result = await api.products.importCsv(file)
+
+      setImportResult(result)
+      resource.reload()
+      window.dispatchEvent(new Event('inventory-refresh'))
+
+      onToast(
+        `Imported ${result.imported} of ${result.totalRows} products`,
+      )
+    } catch (error) {
+      onToast(
+        error instanceof Error
+          ? error.message
+          : 'Could not import products',
+      )
+    } finally {
+      setImporting(false)
+      event.target.value = ''
+    }
   }
-  return <>
-    <PageHeading eyebrow="YOUR CATALOG" title="Products." description="The things you make, move, and keep track of." action={<Button icon="plus" onClick={() => { setEditing(null); onAction('product') }}>Add product</Button>} />
-    <StateMessage loading={resource.loading} error={resource.error} onRetry={resource.reload} />
-    <div className="table-card"><div className="table-toolbar"><div className="table-count"><strong>Product list</strong><span>{resource.data.length} items</span></div><SearchField value={search} onChange={setSearch} /></div>
-      {filtered.length ? <div className="table-scroll"><table><thead><tr><th>PRODUCT</th><th>SKU</th><th>CATEGORY</th><th>REORDER POINT</th><th /></tr></thead><tbody>{filtered.map((product, index) => <tr key={product.id}><td><div className="table-product"><span className={`product-thumb thumb-${index % 4 + 1}`}>{product.name.slice(0, 1).toUpperCase()}</span><span><strong>{product.name}</strong><small>ID · {product.id}</small></span></div></td><td><span className="mono">{product.sku}</span></td><td>{product.category || 'Uncategorized'}</td><td><span className="reorder-number">{product.reorder_level}</span><span className="subtle"> units</span></td><td><div className="row-actions"><button className="icon-button" aria-label={`Edit ${product.name}`} onClick={() => setEditing(product)}><Icon name="edit" size={16} /></button><button className="icon-button row-delete" aria-label={`Delete ${product.name}`} onClick={() => void remove(product)}><Icon name="trash" size={16} /></button></div></td></tr>)}</tbody></table></div> : !resource.loading && !resource.error ? <EmptyState title={search ? 'No matches found' : 'Your catalog starts here'} detail={search ? 'Try another search term.' : 'Add your first product to start keeping track.'} /> : null}
-    </div>
-    {editing && <ActionDialog key={editing.id} kind="product" existing={editing} onClose={() => setEditing(null)} onSaved={(message) => { setEditing(null); onToast(message); resource.reload() }} />}
-  </>
+
+  const remove = async (product: Product) => {
+    if (!window.confirm(`Delete ${product.name}? This cannot be undone.`)) {
+      return
+    }
+
+    try {
+      await api.products.delete(product.id)
+      onToast('Product deleted')
+      resource.reload()
+    } catch (error) {
+      onToast(
+        error instanceof Error
+          ? error.message
+          : 'Could not delete product',
+      )
+    }
+  }
+
+  return (
+    <>
+      <PageHeading
+        eyebrow="YOUR CATALOG"
+        title="Products."
+        description="The things you make, move, and keep track of."
+        action={
+          <>
+            <Button
+              variant="secondary"
+              icon="arrow"
+              disabled={importing}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              {importing ? 'Importing…' : 'Import CSV'}
+            </Button>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              hidden
+              disabled={importing}
+              onChange={importCsv}
+              aria-label="Select product CSV file"
+            />
+
+            <Button
+              icon="plus"
+              onClick={() => {
+                setEditing(null)
+                onAction('product')
+              }}
+            >
+              Add product
+            </Button>
+          </>
+        }
+      />
+
+      <StateMessage
+        loading={resource.loading}
+        error={resource.error}
+        onRetry={resource.reload}
+      />
+
+      {importResult && (
+        <section className="panel" aria-live="polite">
+          <div className="panel-heading">
+            <div>
+              <div className="eyebrow">CSV IMPORT SUMMARY</div>
+              <h2>Import results</h2>
+            </div>
+          </div>
+
+          <div className="stats-grid">
+            <StatCard
+              label="TOTAL ROWS"
+              value={importResult.totalRows}
+              note="Rows processed"
+              icon="receipt"
+            />
+            <StatCard
+              label="IMPORTED"
+              value={importResult.imported}
+              note="Products created"
+              icon="check"
+            />
+            <StatCard
+              label="FAILED"
+              value={importResult.failed}
+              note="Rows needing correction"
+              icon="alert"
+              accent={importResult.failed > 0}
+            />
+          </div>
+
+          {importResult.errors.length > 0 && (
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ROW</th>
+                    <th>SKU</th>
+                    <th>ERROR</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {importResult.errors.map((item, index) => (
+                    <tr key={`${item.row}-${index}`}>
+                      <td>{item.row}</td>
+                      <td>
+                        <span className="mono">
+                          {item.sku || '—'}
+                        </span>
+                      </td>
+                      <td>{item.message}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+
+      <div className="table-card">
+        <div className="table-toolbar">
+          <div className="table-count">
+            <strong>Product list</strong>
+            <span>{resource.data.length} items</span>
+          </div>
+
+          <SearchField
+            value={search}
+            onChange={setSearch}
+          />
+        </div>
+
+        {filtered.length ? (
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>PRODUCT</th>
+                  <th>SKU</th>
+                  <th>CATEGORY</th>
+                  <th>REORDER POINT</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((product, index) => (
+                  <tr key={product.id}>
+                    <td>
+                      <div className="table-product">
+                        <span
+                          className={`product-thumb thumb-${index % 4 + 1}`}
+                        >
+                          {product.name.slice(0, 1).toUpperCase()}
+                        </span>
+                        <span>
+                          <strong>{product.name}</strong>
+                          <small>ID · {product.id}</small>
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <span className="mono">{product.sku}</span>
+                    </td>
+                    <td>{product.category || 'Uncategorized'}</td>
+                    <td>
+                      <span className="reorder-number">
+                        {product.reorder_level}
+                      </span>
+                      <span className="subtle"> units</span>
+                    </td>
+                    <td>
+                      <div className="row-actions">
+                        <button
+                          className="icon-button"
+                          aria-label={`Edit ${product.name}`}
+                          onClick={() => setEditing(product)}
+                        >
+                          <Icon name="edit" size={16} />
+                        </button>
+                        <button
+                          className="icon-button row-delete"
+                          aria-label={`Delete ${product.name}`}
+                          onClick={() => void remove(product)}
+                        >
+                          <Icon name="trash" size={16} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : !resource.loading && !resource.error ? (
+          <EmptyState
+            title={search ? 'No matches found' : 'Your catalog starts here'}
+            detail={
+              search
+                ? 'Try another search term.'
+                : 'Add your first product or import a CSV file.'
+            }
+          />
+        ) : null}
+      </div>
+
+      {editing && (
+        <ActionDialog
+          key={editing.id}
+          kind="product"
+          existing={editing}
+          onClose={() => setEditing(null)}
+          onSaved={(message) => {
+            setEditing(null)
+            onToast(message)
+            resource.reload()
+          }}
+        />
+      )}
+    </>
+  )
 }
+
 
 
 function Warehouses({
@@ -816,28 +1089,365 @@ function Warehouses({
 }
   
 
-function InventoryPage({ onAction }: { onAction: (kind: ModalKind) => void }) {
+
+function InventoryPage({
+  onAction,
+  onToast,
+}: {
+  onAction: (kind: ModalKind) => void
+  onToast: (message: string) => void
+}) {
   const resource = useInventory()
   const products = useProducts()
   const warehouses = useWarehouses()
+
   const [search, setSearch] = useState('')
   const [warehouseFilter, setWarehouseFilter] = useState('')
-  const productsById = new Map(products.data.map((product) => [product.id, product]))
-  const warehousesById = new Map(warehouses.data.map((warehouse) => [warehouse.id, warehouse]))
+  const [importing, setImporting] = useState(false)
+  const [importResult, setImportResult] =
+    useState<InitialStockImportResponse | null>(null)
+
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const productsById = new Map(
+    products.data.map((product) => [product.id, product]),
+  )
+
+  const warehousesById = new Map(
+    warehouses.data.map((warehouse) => [warehouse.id, warehouse]),
+  )
+
   const filtered = resource.data.filter((item) => {
     const product = productsById.get(item.product_id)
     const warehouse = warehousesById.get(item.warehouse_id)
-    const textMatch = `${product?.name ?? item.product_name ?? ''} ${product?.sku ?? item.product_sku ?? ''} ${warehouse?.name ?? item.warehouse_name ?? item.warehouse_code ?? ''}`.toLowerCase().includes(search.toLowerCase())
-    return textMatch && (!warehouseFilter || item.warehouse_id === Number(warehouseFilter))
+
+    const textMatch = [
+      product?.name ?? item.product_name ?? '',
+      product?.sku ?? item.product_sku ?? '',
+      warehouse?.name ?? item.warehouse_name ?? item.warehouse_code ?? '',
+    ]
+      .join(' ')
+      .toLowerCase()
+      .includes(search.toLowerCase())
+
+    return (
+      textMatch &&
+      (!warehouseFilter ||
+        item.warehouse_id === Number(warehouseFilter))
+    )
   })
-  return <>
-    <PageHeading eyebrow="STOCK, EVERYWHERE" title="Inventory." description="See what you have and where it is, all in one place." action={<><Button variant="secondary" icon="arrow" onClick={() => onAction('transfer')}>Transfer</Button><Button icon="plus" onClick={() => onAction('adjust')}>Adjust stock</Button></>} />
-    <StateMessage loading={resource.loading || products.loading || warehouses.loading} error={resource.error || products.error || warehouses.error} onRetry={() => { resource.reload(); products.reload(); warehouses.reload() }} />
-    <div className="table-card"><div className="table-toolbar"><div className="table-count"><strong>Stock by location</strong><span>{resource.data.length} stock positions</span></div><div className="table-filters"><SearchField value={search} onChange={setSearch} placeholder="Search inventory…" /><select className="filter-select" value={warehouseFilter} onChange={(event) => setWarehouseFilter(event.target.value)}><option value="">All warehouses</option>{warehouses.data.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>)}</select></div></div>
-      {filtered.length ? <div className="table-scroll"><table><thead><tr><th>PRODUCT</th><th>WAREHOUSE</th><th>BIN</th><th>QUANTITY</th><th>STATUS</th></tr></thead><tbody>{filtered.map((item, index) => { const product = productsById.get(item.product_id); const warehouse = warehousesById.get(item.warehouse_id); const isLow = item.low_stock ?? item.quantity <= (item.reorder_level ?? product?.reorder_level ?? 0); return <tr key={`${item.product_id}-${item.warehouse_id}`}><td><div className="table-product"><span className={`product-thumb thumb-${index % 4 + 1}`}>{(product?.name ?? item.product_name ?? 'P').slice(0, 1).toUpperCase()}</span><span><strong>{product?.name ?? item.product_name ?? `Product #${item.product_id}`}</strong><small>{product?.sku ?? item.product_sku ?? 'SKU unavailable'}</small></span></div></td><td>{warehouse?.name ?? item.warehouse_name ?? item.warehouse_code ?? `Location ${item.warehouse_id}`}</td><td><span className="mono">{item.bin ?? '—'}</span></td><td><strong className="quantity-value">{item.quantity.toLocaleString()}</strong><span className="subtle"> units</span></td><td><span className={`status-pill ${isLow ? 'status-low' : 'status-good'}`}><i />{isLow ? 'Low stock' : 'In stock'}</span></td></tr> })}</tbody></table></div> : !resource.loading && !resource.error ? <EmptyState title="No stock to show" detail="Stock positions will appear here once inventory is recorded." /> : null}
-    </div>
-  </>
+
+
+const importCsv = async (
+  event: ChangeEvent<HTMLInputElement>,
+) => {
+  const input = event.currentTarget
+  const file = input.files?.[0]
+
+  if (!file) return
+
+  if (!file.name.toLowerCase().endsWith('.csv')) {
+    onToast('Please select a CSV file')
+    input.value = ''
+    return
+  }
+
+  if (file.size === 0) {
+    onToast('The selected CSV file is empty')
+    input.value = ''
+    return
+  }
+
+  setImporting(true)
+  setImportResult(null)
+
+  try {
+    const result = await api.inventory.importInitialStock(file)
+
+    setImportResult(result)
+
+    if (result.imported > 0) {
+      window.dispatchEvent(new Event('inventory-refresh'))
+    }
+
+    onToast(
+      result.failed > 0
+        ? `Imported ${result.imported} rows; ${result.failed} failed`
+        : `Successfully imported ${result.imported} stock rows`,
+    )
+  } catch (error) {
+    onToast(
+      error instanceof Error
+        ? error.message
+        : 'Could not import initial stock',
+    )
+  } finally {
+    setImporting(false)
+    input.value = ''
+  }
 }
+
+  return (
+    <>
+      <PageHeading
+        eyebrow="STOCK, EVERYWHERE"
+        title="Inventory."
+        description="See what you have and where it is, all in one place."
+        action={
+          <>
+            <Button
+              variant="secondary"
+              icon="arrow"
+              disabled={importing}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              {importing ? 'Importing…' : 'Import initial stock'}
+            </Button>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              hidden
+              disabled={importing}
+              onChange={importCsv}
+              aria-label="Select initial inventory CSV file"
+            />
+
+            <Button
+              variant="secondary"
+              icon="arrow"
+              onClick={() => onAction('transfer')}
+            >
+              Transfer
+            </Button>
+
+            <Button
+              icon="plus"
+              onClick={() => onAction('adjust')}
+            >
+              Adjust stock
+            </Button>
+          </>
+        }
+      />
+
+      <StateMessage
+        loading={
+          resource.loading || products.loading || warehouses.loading
+        }
+        error={resource.error || products.error || warehouses.error}
+        onRetry={() => {
+          resource.reload()
+          products.reload()
+          warehouses.reload()
+        }}
+      />
+
+      {importResult && (
+        <section className="panel" aria-live="polite">
+          <div className="panel-heading">
+            <div>
+              <div className="eyebrow">CSV IMPORT SUMMARY</div>
+              <h2>Initial stock import results</h2>
+            </div>
+
+            <Button
+              variant="text"
+              onClick={() => setImportResult(null)}
+            >
+              Dismiss
+            </Button>
+          </div>
+
+          <div className="stats-grid">
+            <StatCard
+              label="TOTAL ROWS"
+              value={importResult.totalRows}
+              note="Rows processed"
+              icon="receipt"
+            />
+            <StatCard
+              label="IMPORTED"
+              value={importResult.imported}
+              note="Stock positions created"
+              icon="check"
+            />
+            <StatCard
+              label="FAILED"
+              value={importResult.failed}
+              note="Rows needing correction"
+              icon="alert"
+              accent={importResult.failed > 0}
+            />
+          </div>
+
+          {importResult.errors.length > 0 && (
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ROW</th>
+                    <th>PRODUCT SKU</th>
+                    <th>WAREHOUSE CODE</th>
+                    <th>ERROR</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {importResult.errors.map((item, index) => (
+                    <tr key={`${item.row}-${index}`}>
+                      <td>{item.row}</td>
+                      <td>
+                        <span className="mono">
+                          {item.product_sku || '—'}
+                        </span>
+                      </td>
+                      <td>
+                        <span className="mono">
+                          {item.warehouse_code || '—'}
+                        </span>
+                      </td>
+                      <td>{item.message}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+
+      <div className="table-card">
+        <div className="table-toolbar">
+          <div className="table-count">
+            <strong>Stock by location</strong>
+            <span>{resource.data.length} stock positions</span>
+          </div>
+
+          <div className="table-filters">
+            <SearchField
+              value={search}
+              onChange={setSearch}
+              placeholder="Search inventory…"
+            />
+
+            <select
+              className="filter-select"
+              value={warehouseFilter}
+              onChange={(event) =>
+                setWarehouseFilter(event.target.value)
+              }
+            >
+              <option value="">All warehouses</option>
+              {warehouses.data.map((warehouse) => (
+                <option key={warehouse.id} value={warehouse.id}>
+                  {warehouse.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {filtered.length > 0 ? (
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>PRODUCT</th>
+                  <th>WAREHOUSE</th>
+                  <th>BIN</th>
+                  <th>QUANTITY</th>
+                  <th>STATUS</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((item, index) => {
+                  const product = productsById.get(item.product_id)
+                  const warehouse = warehousesById.get(item.warehouse_id)
+
+                  const reorderLevel =
+                    item.reorder_level ?? product?.reorder_level ?? 0
+
+                  const isLow =
+                    item.low_stock ?? item.quantity <= reorderLevel
+
+                  return (
+                    <tr
+                      key={`${item.product_id}-${item.warehouse_id}`}
+                    >
+                      <td>
+                        <div className="table-product">
+                          <span
+                            className={`product-thumb thumb-${(index % 4) + 1}`}
+                          >
+                            {(
+                              product?.name ??
+                              item.product_name ??
+                              'P'
+                            )
+                              .slice(0, 1)
+                              .toUpperCase()}
+                          </span>
+                          <span>
+                            <strong>
+                              {product?.name ??
+                                item.product_name ??
+                                `Product #${item.product_id}`}
+                            </strong>
+                            <small>
+                              {product?.sku ??
+                                item.product_sku ??
+                                'SKU unavailable'}
+                            </small>
+                          </span>
+                        </div>
+                      </td>
+
+                      <td>
+                        {warehouse?.name ??
+                          item.warehouse_name ??
+                          item.warehouse_code ??
+                          `Location ${item.warehouse_id}`}
+                      </td>
+
+                      <td>
+                        <span className="mono">{item.bin ?? '—'}</span>
+                      </td>
+
+                      <td>
+                        <strong className="quantity-value">
+                          {item.quantity.toLocaleString()}
+                        </strong>
+                        <span className="subtle"> units</span>
+                      </td>
+
+                      <td>
+                        <span
+                          className={`status-pill ${
+                            isLow ? 'status-low' : 'status-good'
+                          }`}
+                        >
+                          <i />
+                          {isLow ? 'Low stock' : 'In stock'}
+                        </span>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : !resource.loading && !resource.error ? (
+          <EmptyState
+            title="No stock to show"
+            detail="Stock positions will appear here once inventory is recorded."
+          />
+        ) : null}
+      </div>
+    </>
+  )
+}
+
 
 function LowStockPage({ onAction }: { onAction: (kind: ModalKind) => void }) {
   const resource = useLowStock()

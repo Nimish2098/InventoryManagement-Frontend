@@ -43,6 +43,16 @@ export interface Product {
   reorder_level: number
 }
 
+export interface ProductImportResponse {
+  totalRows: number
+  imported: number
+  failed: number
+  errors: {
+    row: number
+    sku: string
+    message: string
+  }[]
+}
 export interface Warehouse {
   id: number
   code: string
@@ -64,6 +74,20 @@ export interface InventoryItem {
   product_name?: string
   warehouse_name?: string
 }
+
+
+export interface InitialStockImportResponse {
+  totalRows: number
+  imported: number
+  failed: number
+  errors: {
+    row: number
+    product_sku: string
+    warehouse_code: string
+    message: string
+  }[]
+}
+
 
 export interface Customer {
   id: number
@@ -172,6 +196,15 @@ export const api = {
     create: (data: Omit<Product, 'id'>) => request<Product>('/product', json('POST', data)),
     update: (id: number, data: Omit<Product, 'id'>) => request<Product>(`/product/${id}`, json('PUT', data)),
     delete: (id: number) => request<void>(`/product/${id}`, json('DELETE')),
+    importCsv: (file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    return request<ProductImportResponse>('/product/import', {
+      method: 'POST',
+      body: formData,
+    })
+  },
   },
   warehouses: {
     getAll: () => request<Warehouse[]>('/warehouse'),
@@ -202,6 +235,19 @@ export const api = {
       request<InventoryItem>('/inventory/adjustments', json('POST', data)),
     transfer: (data: { product_id: number; from_warehouse_id: number; to_warehouse_id: number; quantity: number }) =>
       request<InventoryItem[]>('/inventory/transfers', json('POST', data)),
+    
+    importInitialStock: (file: File) => {
+      const formData = new FormData()
+      formData.append('file', file)
+
+      return request<InitialStockImportResponse>(
+        '/inventory/initial-stock/import',
+        {
+          method: 'POST',
+          body: formData,
+        },
+      )
+    },
   },
   customers: {
     getAll: () => request<Customer[]>('/customer'),
