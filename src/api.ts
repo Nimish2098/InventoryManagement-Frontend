@@ -1,18 +1,23 @@
 const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL ??
-  (import.meta.env.DEV ? '' : 'http://localhost:8080')
+  import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080'
 ).replace(/\/$/, '')
-const API_PREFIX = import.meta.env.DEV && !import.meta.env.VITE_API_BASE_URL ? '/api' : ''
-const ACCESS_TOKEN_KEY = 'northstock-access-token'
 
+const API_PREFIX = '' // No extra prefix needed; paths match backend directly
+const ACCESS_TOKEN_KEY = 'northstock-access-token'
 export interface User {
   name: string
   email: string
 }
 
 export interface AuthTokenResponse {
-  access_token?: string
-  token?: string
+  accessToken: string
+  tokenType: string
+  expiresIn: number
+  user: {
+    id: number
+    name: string
+    email: string
+  }
 }
 
 let unauthorizedHandler: (() => void) | null = null
@@ -88,38 +93,63 @@ export interface Movement {
   quantity_change?: number
 }
 
-async function request<T>(path: string, init?: RequestInit, authenticated = true): Promise<T> {
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  authenticated = true,
+): Promise<T> {
   const token = authenticated ? getAccessToken() : null
-  const response = await fetch(`${API_BASE_URL}${API_PREFIX}${path}`, {
-    ...init,
-    headers: {
-      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...init?.headers,
+
+  const headers = new Headers(init?.headers)
+
+  if (init?.body && !(init.body instanceof FormData)) {
+    headers.set('Content-Type', 'application/json')
+  }
+
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`)
+  }
+
+  const response = await fetch(
+    `${API_BASE_URL}${API_PREFIX}${path}`,
+    {
+      ...init,
+      headers,
     },
-  })
+  )
 
   if (!response.ok) {
     if (response.status === 401 && token && getAccessToken() === token) {
       setAccessToken(null)
       unauthorizedHandler?.()
     }
+
     const body = await response.text()
     let message = body
+
     if (body) {
       try {
-        const problem = JSON.parse(body) as { detail?: string; title?: string }
+        const problem = JSON.parse(body) as {
+          detail?: string
+          title?: string
+        }
+
         message = problem.detail || problem.title || body
       } catch {
         message = body
       }
     }
+
     throw new Error(message || `Request failed (${response.status})`)
   }
 
-  if (response.status === 204) return undefined as T
+  if (response.status === 204) {
+    return undefined as T
+  }
+
   return response.json() as Promise<T>
 }
+
 
 const json = (method: string, data?: unknown): RequestInit => ({
   method,
@@ -148,7 +178,17 @@ export const api = {
     getById: (id: number) => request<Warehouse>(`/warehouse/${id}`),
     create: (data: Omit<Warehouse, 'id' | 'isActive'>) => request<Warehouse>('/warehouse', json('POST', data)),
     update: (id: number, data: Omit<Warehouse, 'id'>) => request<Warehouse>(`/warehouse/${id}`, json('PUT', data)),
-    delete: (id: number) => request<void>(`/warehouse/${id}`, json('DELETE')),
+    delete: (id: number) => request<void>(`/warehouse/${id}`, json('DELETE')),    
+    importCsv: (file: File) => {
+      const formData = new FormData()
+      formData.append('file', file)
+
+      return request<Warehouse[]>('/warehouse/import', {
+        method: 'POST',
+        body: formData,
+      })
+},
+
   },
   inventory: {
     getAll: (warehouseId?: number) =>

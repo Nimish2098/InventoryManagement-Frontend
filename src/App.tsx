@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode,} from 'react'
 import { BrowserRouter, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { api, getAccessToken, setAccessToken, setUnauthorizedHandler, type Customer, type InventoryItem, type Movement, type Order, type Product, type User, type Warehouse } from './api'
 import './App.css'
@@ -328,7 +328,7 @@ function AuthPage({ mode }: { mode: 'login' | 'register' }) {
           email,
           password,
         })
-        const token = response?.access_token ?? response?.token
+        const token = response?.accessToken
         if (token) {
           await signIn(token)
           navigate(destination, { replace: true })
@@ -337,8 +337,12 @@ function AuthPage({ mode }: { mode: 'login' | 'register' }) {
         }
       } else {
         const response = await api.auth.login({ email, password })
-        const token = response.access_token ?? response.token
-        if (!token) throw new Error('The sign-in response did not include an access token.')
+        const token = response.accessToken
+
+        if (!token) {
+          throw new Error('The sign-in response did not include an access token.')
+        }
+
         await signIn(token)
         navigate(destination, { replace: true })
       }
@@ -589,25 +593,228 @@ function Products({ onAction, onToast }: { onAction: (kind: ModalKind) => void; 
   </>
 }
 
-function Warehouses({ onAction, onToast }: { onAction: (kind: ModalKind) => void; onToast: (message: string) => void }) {
+
+function Warehouses({
+  onAction,
+  onToast,
+}: {
+  onAction: (kind: ModalKind) => void
+  onToast: (message: string) => void
+}) {
   const resource = useWarehouses()
   const [search, setSearch] = useState('')
   const [editing, setEditing] = useState<Warehouse | null>(null)
-  const filtered = resource.data.filter((warehouse) => `${warehouse.name} ${warehouse.code}`.toLowerCase().includes(search.toLowerCase()))
+  const [importing, setImporting] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const filtered = resource.data.filter((warehouse) =>
+    `${warehouse.name} ${warehouse.code}`
+      .toLowerCase()
+      .includes(search.toLowerCase()),
+  )
+
+  const importCsv = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+      onToast('Please select a CSV file')
+      event.target.value = ''
+      return
+    }
+
+    setImporting(true)
+
+    try {
+      const imported = await api.warehouses.importCsv(file)
+
+      onToast(`Successfully imported ${imported.length} warehouses`)
+      resource.reload()
+      window.dispatchEvent(new Event('inventory-refresh'))
+    } catch (error) {
+      onToast(
+        error instanceof Error
+          ? error.message
+          : 'Could not import warehouses',
+      )
+    } finally {
+      setImporting(false)
+      event.target.value = ''
+    }
+  }
+
   const remove = async (warehouse: Warehouse) => {
     if (!window.confirm(`Delete ${warehouse.name}?`)) return
-    try { await api.warehouses.delete(warehouse.id); onToast('Warehouse deleted'); resource.reload() }
-    catch (error) { onToast(error instanceof Error ? error.message : 'Could not delete warehouse') }
+
+    try {
+      await api.warehouses.delete(warehouse.id)
+      onToast('Warehouse deleted')
+      resource.reload()
+    } catch (error) {
+      onToast(
+        error instanceof Error
+          ? error.message
+          : 'Could not delete warehouse',
+      )
+    }
   }
-  return <>
-    <PageHeading eyebrow="WHERE IT LIVES" title="Warehouses." description="Every location, accounted for and in its place." action={<Button icon="plus" onClick={() => { setEditing(null); onAction('warehouse') }}>Add warehouse</Button>} />
-    <StateMessage loading={resource.loading} error={resource.error} onRetry={resource.reload} />
-    <div className="table-card"><div className="table-toolbar"><div className="table-count"><strong>Locations</strong><span>{resource.data.length} warehouses</span></div><SearchField value={search} onChange={setSearch} placeholder="Search warehouses…" /></div>
-      {filtered.length ? <div className="table-scroll"><table><thead><tr><th>WAREHOUSE</th><th>CODE</th><th>CAPACITY</th><th>STATUS</th><th /></tr></thead><tbody>{filtered.map((warehouse) => <tr key={warehouse.id}><td><div className="table-product"><span className="warehouse-thumb"><Icon name="warehouse" size={18} /></span><span><strong>{warehouse.name}</strong><small>ID · {warehouse.id}</small></span></div></td><td><span className="mono">{warehouse.code}</span></td><td>{warehouse.capacity.toLocaleString()} <span className="subtle">units</span></td><td><span className={`status-pill ${warehouse.isActive ? 'status-active' : 'status-inactive'}`}><i />{warehouse.isActive ? 'Active' : 'Inactive'}</span></td><td><div className="row-actions"><button className="icon-button" aria-label={`Edit ${warehouse.name}`} onClick={() => setEditing(warehouse)}><Icon name="edit" size={16} /></button><button className="icon-button row-delete" aria-label={`Delete ${warehouse.name}`} onClick={() => void remove(warehouse)}><Icon name="trash" size={16} /></button></div></td></tr>)}</tbody></table></div> : !resource.loading && !resource.error ? <EmptyState title={search ? 'No matches found' : 'No warehouses yet'} detail={search ? 'Try another search term.' : 'Add a warehouse to map your inventory.'} /> : null}
-    </div>
-    {editing && <ActionDialog key={editing.id} kind="warehouse" existing={editing} onClose={() => setEditing(null)} onSaved={(message) => { setEditing(null); onToast(message); resource.reload() }} />}
-  </>
+
+  return (
+    <>
+      <PageHeading
+        eyebrow="WHERE IT LIVES"
+        title="Warehouses."
+        description="Every location, accounted for and in its place."
+        action={
+          <>
+            <Button
+              variant="secondary"
+              icon="arrow"
+              disabled={importing}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              {importing ? 'Importing…' : 'Import CSV'}
+            </Button>
+
+            <Button
+              icon="plus"
+              onClick={() => {
+                setEditing(null)
+                onAction('warehouse')
+              }}
+            >
+              Add warehouse
+            </Button>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              hidden
+              onChange={importCsv}
+              disabled={importing}
+              aria-label="Select warehouse CSV file"
+            />
+          </>
+        }
+      />
+
+      <StateMessage
+        loading={resource.loading}
+        error={resource.error}
+        onRetry={resource.reload}
+      />
+
+      <div className="table-card">
+        <div className="table-toolbar">
+          <div className="table-count">
+            <strong>Locations</strong>
+            <span>{resource.data.length} warehouses</span>
+          </div>
+          <SearchField
+            value={search}
+            onChange={setSearch}
+            placeholder="Search warehouses…"
+          />
+        </div>
+
+        {filtered.length ? (
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>WAREHOUSE</th>
+                  <th>CODE</th>
+                  <th>CAPACITY</th>
+                  <th>STATUS</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((warehouse) => (
+                  <tr key={warehouse.id}>
+                    <td>
+                      <div className="table-product">
+                        <span className="warehouse-thumb">
+                          <Icon name="warehouse" size={18} />
+                        </span>
+                        <span>
+                          <strong>{warehouse.name}</strong>
+                          <small>ID · {warehouse.id}</small>
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <span className="mono">{warehouse.code}</span>
+                    </td>
+                    <td>
+                      {warehouse.capacity.toLocaleString()}{' '}
+                      <span className="subtle">units</span>
+                    </td>
+                    <td>
+                      <span
+                        className={`status-pill ${
+                          warehouse.isActive
+                            ? 'status-active'
+                            : 'status-inactive'
+                        }`}
+                      >
+                        <i />
+                        {warehouse.isActive ? 'Active' : 'Inactive'}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="row-actions">
+                        <button
+                          className="icon-button"
+                          aria-label={`Edit ${warehouse.name}`}
+                          onClick={() => setEditing(warehouse)}
+                        >
+                          <Icon name="edit" size={16} />
+                        </button>
+                        <button
+                          className="icon-button row-delete"
+                          aria-label={`Delete ${warehouse.name}`}
+                          onClick={() => void remove(warehouse)}
+                        >
+                          <Icon name="trash" size={16} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : !resource.loading && !resource.error ? (
+          <EmptyState
+            title={search ? 'No matches found' : 'No warehouses yet'}
+            detail={
+              search
+                ? 'Try another search term.'
+                : 'Add a warehouse or import a CSV file to get started.'
+            }
+          />
+        ) : null}
+      </div>
+
+      {editing && (
+        <ActionDialog
+          key={editing.id}
+          kind="warehouse"
+          existing={editing}
+          onClose={() => setEditing(null)}
+          onSaved={(message) => {
+            setEditing(null)
+            onToast(message)
+            resource.reload()
+          }}
+        />
+      )}
+    </>
+  )
 }
+  
 
 function InventoryPage({ onAction }: { onAction: (kind: ModalKind) => void }) {
   const resource = useInventory()
