@@ -1,0 +1,381 @@
+/* All rules are scoped under .rp so they won't collide with your existing styles. */
+
+.rp {
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --ink: #1a2230;
+  --muted: #5e6878;
+  --line: #dde1e8;
+  --focus: #2457d6;
+
+  --critical: #b42318;
+  --critical-bg: #fdecea;
+  --critical-fill: #d92d20;
+  --reorder: #7a4f00;
+  --reorder-bg: #fff3d6;
+  --reorder-fill: #e0a100;
+  --ok: #1e6b4a;
+  --ok-bg: #e4f4ec;
+  --ok-fill: #2f9e6e;
+  --nodata: #5e6878;
+  --nodata-bg: #eceef2;
+  --nodata-fill: #98a2b3;
+
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.rp *,
+.rp *::before,
+.rp *::after {
+  box-sizing: border-box;
+}
+
+/* status colour tokens, reused by chips, badges and bars */
+.rp .s-CRITICAL {
+  --c: var(--critical);
+  --c-bg: var(--critical-bg);
+  --c-fill: var(--critical-fill);
+}
+.rp .s-REORDER {
+  --c: var(--reorder);
+  --c-bg: var(--reorder-bg);
+  --c-fill: var(--reorder-fill);
+}
+.rp .s-OK {
+  --c: var(--ok);
+  --c-bg: var(--ok-bg);
+  --c-fill: var(--ok-fill);
+}
+.rp .s-NO_DATA {
+  --c: var(--nodata);
+  --c-bg: var(--nodata-bg);
+  --c-fill: var(--nodata-fill);
+}
+
+.rp .sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.rp .muted {
+  color: var(--muted);
+}
+
+.rp button:focus-visible,
+.rp input:focus-visible,
+.rp select:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* header */
+.rp-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.rp-head h1 {
+  margin: 0;
+  font-size: 1.6rem;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.rp-sub {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+.rp-btn {
+  font: inherit;
+  font-weight: 600;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+.rp-btn:hover:not(:disabled) {
+  border-color: var(--ink);
+}
+.rp-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* status filter chips: the left stripe carries the status colour */
+.rp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.rp .chip {
+  --c: var(--ink);
+  font: inherit;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 7px 14px 7px 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--c);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+.rp .chip b {
+  font-size: 1.05rem;
+}
+.rp .chip:hover {
+  border-color: var(--c);
+}
+.rp .chip.is-on {
+  background: var(--ink);
+  border-color: var(--ink);
+  border-left-color: var(--c);
+  color: #fff;
+}
+
+/* search and warehouse */
+.rp-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.rp-tools label {
+  flex: 1 1 220px;
+  max-width: 320px;
+}
+
+.rp-tools input,
+.rp-tools select {
+  width: 100%;
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.rp-hint {
+  margin: 0 0 14px;
+  max-width: 68ch;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+/* table */
+.rp-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.rp-table {
+  width: 100%;
+  min-width: 780px;
+  border-collapse: collapse;
+}
+
+.rp-table th,
+.rp-table td {
+  padding: 10px 14px;
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--line);
+}
+
+.rp-table thead th {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+  background: #fafbfc;
+  white-space: nowrap;
+}
+
+.rp-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.rp-table .num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.rp-table .row:hover {
+  background: #fafbfc;
+}
+
+.rp-empty {
+  padding: 28px 14px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.rp .link {
+  font: inherit;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--focus);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* product cell: the whole name is the expand control */
+.rp .expander {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rp .p-name {
+  display: block;
+  font-weight: 600;
+}
+.rp .p-wh {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.rp .chev {
+  flex: none;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+.rp .chev.is-open {
+  transform: rotate(90deg);
+}
+
+/* status badge */
+.rp .badge {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  background: var(--c-bg);
+  color: var(--c);
+}
+
+/* days of cover bar with lead-time tick */
+.rp .cover {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 170px;
+}
+
+.rp .cover-track {
+  position: relative;
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--nodata-bg);
+}
+
+.rp .cover-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--c-fill);
+}
+
+.rp .cover-tick {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--ink);
+}
+
+.rp .cover-num {
+  min-width: 52px;
+  text-align: right;
+  font-size: 0.9rem;
+}
+
+/* expanded detail row */
+.rp .detail td {
+  background: #fafbfc;
+  padding: 14px 14px 18px 38px;
+}
+
+.rp .why {
+  margin: 0 0 12px;
+  max-width: 72ch;
+}
+
+.rp .facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  margin: 0;
+}
+.rp .facts div {
+  min-width: 120px;
+}
+.rp .facts dt {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.rp .facts dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+/* error panel */
+.rp-panel {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.rp-error {
+  border-color: var(--critical);
+  background: var(--critical-bg);
+}
+.rp-error p {
+  margin: 0 0 10px;
+}
+
+@media (max-width: 600px) {
+  .rp-head {
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rp .chev {
+    transition: none;
+  }
+}

@@ -1,6 +1,6 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type ChangeEvent} from 'react'
+import { createContext,Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type ChangeEvent} from 'react'
 import { BrowserRouter, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
-import { api, getAccessToken, setAccessToken, setUnauthorizedHandler, type Customer, type InventoryItem,type InitialStockImportResponse, type Movement, type Order, type Product, type ProductImportResponse, type User, type Warehouse } from './api'
+import { api, getAccessToken, setAccessToken, setUnauthorizedHandler, type Customer, type InventoryItem,type InitialStockImportResponse, type Movement, type Order, type Product, type ProductImportResponse, type User, type Warehouse,type ReorderRecommendation, type ReorderStatus  } from './api'
 import './App.css'
 
 type ModalKind = 'product' | 'warehouse' | 'customer' | 'adjust' | 'transfer' | 'order'
@@ -174,7 +174,7 @@ function useInventory() { return useResource(api.inventory.getAll, [] as Invento
 function useCustomers() { return useResource(api.customers.getAll, [] as Customer[]) }
 function useOrders() { return useResource(api.orders.getAll, [] as Order[]) }
 function useLowStock() { return useResource(api.inventory.lowStock, [] as InventoryItem[]) }
-
+function useReorder() { return useResource(api.inventory.reorderRecommendations, [] as ReorderRecommendation[]) }
 const navGroups = [
   {
     label: 'WORKSPACE',
@@ -183,6 +183,7 @@ const navGroups = [
       { to: '/inventory', label: 'Inventory', icon: 'boxes' },
       { to: '/low-stock', label: 'Low stock', icon: 'alert' },
       { to: '/movements', label: 'Movement log', icon: 'activity' },
+      { to: '/reorder', label: 'Reorder', icon: 'refresh' },
     ],
   },
   {
@@ -468,6 +469,7 @@ function AppShell() {
             <Route path="/orders" element={<OrdersPage key={refreshKey} onAction={setModal} onToast={setToast} />} />
             <Route path="/movements" element={<MovementsPage key={refreshKey} />} />
             <Route path="*" element={<EmptyState title="This page isn't here" detail="Choose a destination from the navigation." />} />
+            <Route path="/reorder" element={<ReorderPage key={refreshKey} onAction={setModal} />} />
           </Routes>
         </div>
         <footer className="page-footer"><span>APEXSTOCK <span className="footer-dot">•</span> INVENTORY, IN GOOD ORDER.</span><span>DESIGNED FOR THE EVERYDAY.</span></footer>
@@ -524,10 +526,25 @@ function Dashboard({ onAction }: { onAction: (kind: ModalKind) => void }) {
   const lowStockRows = lowStock.data.slice(0, 4)
   const productsById = new Map(products.data.map((product) => [product.id, product]))
   const warehousesById = new Map(warehouses.data.map((warehouse) => [warehouse.id, warehouse]))
+  const reorder = useReorder()
+  const critical = reorder.data.filter((row) => row.status === 'CRITICAL')
 
   return <>
     <PageHeading eyebrow="YOUR OPERATIONS, AT A GLANCE" title={<>A clearer view<br className="desktop-break" /> of your stock.</>} description="Your operations, at a glance. Pick up where your team left off." action={<Button icon="plus" onClick={() => onAction('product')}>Add a product</Button>} />
     <StateMessage loading={loading} error={firstError} onRetry={reload} />
+      {!reorder.error && critical.length > 0 && (
+    <NavLink to="/reorder" className="notice-strip critical-strip">
+      <span className="notice-icon"><Icon name="alert" size={18} /></span>
+      <span>
+        <strong>
+          {critical.length} {critical.length === 1 ? 'product is' : 'products are'} likely to run out before a restock can arrive.
+        </strong>{' '}
+        {critical.slice(0, 3).map((row) => `${row.productName} (${oneDecimal(row.daysOfCover ?? 0)} d)`).join(', ')}
+        {critical.length > 3 ? ` and ${critical.length - 3} more` : ''}
+      </span>
+      <span className="notice-count">REVIEW <Icon name="arrow" size={13} /></span>
+    </NavLink>
+  )}
     <section className="stats-grid">
       <StatCard label="PRODUCTS" value={products.error ? '—' : products.data.length.toLocaleString()} note={products.error ? 'Data unavailable' : 'Across your full catalog'} icon="tag" />
       <StatCard label="WAREHOUSES" value={warehouses.error ? '—' : warehouses.data.length.toString().padStart(2, '0')} note={warehouses.error ? 'Data unavailable' : `${warehouses.data.filter((warehouse) => warehouse.isActive).length} currently active`} icon="warehouse" />
@@ -1447,7 +1464,123 @@ const importCsv = async (
     </>
   )
 }
+type ReorderFilter = 'all' | ReorderStatus
 
+const REORDER_LABEL: Record<ReorderStatus, string> = { CRITICAL: 'Critical', REORDER: 'Reorder', OK: 'Healthy', NO_DATA: 'No data' }
+const REORDER_PILL: Record<ReorderStatus, string> = { CRITICAL: 'status-low', REORDER: 'status-pending', OK: 'status-good', NO_DATA: 'status-inactive' }
+const oneDecimal = (value: number) => value.toLocaleString(undefined, { maximumFractionDigits: 1 })
+
+/* Days of stock left, drawn against supplier lead time. The tick marks the lead time:
+   a bar that stops short of it means the shelf empties before a new order can arrive. */
+function CoverBar({ cover, lead, status }: { cover: number | null; lead: number; status: ReorderStatus }) {
+  if (cover === null) return <span className="subtle">No sales yet</span>
+  const scale = Math.max(lead, 1) * 3
+  const fill = Math.min(cover / scale, 1) * 100
+  const tick = (Math.max(lead, 1) / scale) * 100
+  return <div className="reorder-cover">
+    <div className="reorder-track" role="img" aria-label={`${oneDecimal(cover)} days of stock left; supplier lead time is ${lead} days`}>
+      <span className={`reorder-fill reorder-fill-${status.toLowerCase()}`} style={{ width: `${fill}%` }} />
+      <span className="reorder-tick" style={{ left: `${tick}%` }} />
+    </div>
+    <span className="reorder-days">{oneDecimal(cover)} d</span>
+  </div>
+}
+
+function ReorderPage({ onAction }: { onAction: (kind: ModalKind) => void }) {
+  const resource = useReorder()
+  const [search, setSearch] = useState('')
+  const [warehouseFilter, setWarehouseFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState<ReorderFilter>('all')
+  const [open, setOpen] = useState<Set<number>>(new Set())
+
+  const counts = useMemo(() => {
+    const result: Record<ReorderStatus, number> = { CRITICAL: 0, REORDER: 0, OK: 0, NO_DATA: 0 }
+    resource.data.forEach((row) => { result[row.status] += 1 })
+    return result
+  }, [resource.data])
+
+  const warehouseOptions = useMemo(() => {
+    const seen = new Map<number, string>()
+    resource.data.forEach((row) => seen.set(row.warehouseId, row.warehouseName))
+    return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]))
+  }, [resource.data])
+
+  const filtered = resource.data.filter((row) =>
+    (statusFilter === 'all' || row.status === statusFilter) &&
+    (!warehouseFilter || row.warehouseId === Number(warehouseFilter)) &&
+    `${row.productName} ${row.warehouseName}`.toLowerCase().includes(search.toLowerCase()))
+
+  const toggle = (id: number) => setOpen((current) => {
+    const next = new Set(current)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    return next
+  })
+
+  const segments: Array<[ReorderFilter, string]> = [
+    ['all', `All ${resource.data.length}`],
+    ['CRITICAL', `Critical ${counts.CRITICAL}`],
+    ['REORDER', `Reorder ${counts.REORDER}`],
+    ['OK', `Healthy ${counts.OK}`],
+    ['NO_DATA', `No data ${counts.NO_DATA}`],
+  ]
+
+  const REORDER_PILL: Record<ReorderStatus, string> = { CRITICAL: 'status-critical', REORDER: 'status-reorder', OK: 'status-good', NO_DATA: 'status-inactive' }
+  return <>
+    <PageHeading eyebrow="WHAT TO ORDER, AND WHEN" title="Reorder." description="How much to order and why, based on your recent sales and supplier lead times." action={<Button icon="plus" onClick={() => onAction('adjust')}>Adjust stock</Button>} />
+    <StateMessage loading={resource.loading} error={resource.error} onRetry={resource.reload} />
+    <div className="notice-strip"><span className="notice-icon"><Icon name="clock" size={18} /></span><span>The bar shows days of stock left. The tick marks supplier lead time: when the bar stops short of it, the shelf empties before a new order can arrive.</span><span className="notice-count">{counts.CRITICAL + counts.REORDER} NEED ORDERING</span></div>
+    <div className="table-card">
+      <div className="table-toolbar reorder-toolbar">
+        <div className="table-count"><strong>Recommendations</strong><span>Most urgent first</span></div>
+        <div className="table-filters reorder-filters">
+          <div className="segmented-control">{segments.map(([value, label]) => <button key={value} className={statusFilter === value ? 'segment-active' : ''} onClick={() => setStatusFilter(value)}>{label}</button>)}</div>
+          <SearchField value={search} onChange={setSearch} placeholder="Search products…" />
+          <select className="filter-select" value={warehouseFilter} onChange={(event) => setWarehouseFilter(event.target.value)}>
+            <option value="">All warehouses</option>
+            {warehouseOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+          </select>
+        </div>
+      </div>
+      {filtered.length ? <div className="table-scroll"><table>
+        <thead><tr><th>PRODUCT</th><th>STATUS</th><th>IN STOCK</th><th>DAYS OF COVER</th><th>REORDER POINT</th><th>ORDER QTY</th></tr></thead>
+        <tbody>{filtered.map((row, index) => {
+          const isOpen = open.has(row.inventoryItemId)
+          return <Fragment key={row.inventoryItemId}>
+            <tr>
+              <td>
+                <button type="button" className="reorder-expander" aria-expanded={isOpen} onClick={() => toggle(row.inventoryItemId)}>
+                  <span className={`reorder-chev ${isOpen ? 'is-open' : ''}`}><Icon name="down" size={15} /></span>
+                  <span className="table-product">
+                    <span className={`product-thumb thumb-${index % 4 + 1}`}>{row.productName.slice(0, 1).toUpperCase()}</span>
+                    <span><strong>{row.productName}</strong><small>{row.warehouseName}</small></span>
+                  </span>
+                </button>
+              </td>
+              <td><span className={`status-pill ${REORDER_PILL[row.status]}`}><i />{REORDER_LABEL[row.status]}</span></td>
+              <td><strong className="quantity-value">{row.currentStock.toLocaleString()}</strong> <span className="subtle">units</span></td>
+              <td><CoverBar cover={row.daysOfCover} lead={row.leadTimeDays} status={row.status} /></td>
+              <td>{row.status === 'NO_DATA' ? <span className="subtle">—</span> : <>{oneDecimal(row.reorderPoint)} <span className="subtle">units</span></>}</td>
+              <td>{row.suggestedOrderQty > 0 ? <span className="order-qty-pill">+{oneDecimal(row.suggestedOrderQty)} units</span> : <span className="subtle">—</span>}</td>
+            </tr>
+            {isOpen && <tr className="reorder-detail"><td colSpan={6}>
+              <p>{row.explanation}</p>
+              {row.status !== 'NO_DATA' && <div className="reorder-facts">
+                {([
+                  ['Average daily demand', oneDecimal(row.avgDailyDemand)],
+                  ['Demand variability (σ)', oneDecimal(row.demandStdDev)],
+                  ['Safety stock', oneDecimal(row.safetyStock)],
+                  ['Supplier lead time', `${row.leadTimeDays} days`],
+                  ['Service level', `${Math.round(row.serviceLevel * 100)}%`],
+                ] as Array<[string, string]>).map(([label, value]) => <div key={label}><small>{label}</small><strong>{value}</strong></div>)}
+              </div>}
+            </td></tr>}
+          </Fragment>
+        })}</tbody>
+      </table></div> : !resource.loading && !resource.error ? <EmptyState title={resource.data.length ? 'No matches found' : 'Nothing to recommend yet'} detail={resource.data.length ? 'Try another filter or search term.' : 'Recommendations appear once stock and sales are recorded.'} /> : null}
+    </div>
+  </>
+}
 
 function LowStockPage({ onAction }: { onAction: (kind: ModalKind) => void }) {
   const resource = useLowStock()

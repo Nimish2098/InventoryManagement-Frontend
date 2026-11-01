@@ -1,5 +1,5 @@
 const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL ?? 'https://inventory-management-n8sc.onrender.com'
+  import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080'
 ).replace(/\/$/, '')
 
 const API_PREFIX = '' // No extra prefix needed; paths match backend directly
@@ -110,7 +110,26 @@ export interface Order {
   created_at?: string
   items: OrderItem[]
 }
+export type ReorderStatus = 'CRITICAL' | 'REORDER' | 'OK' | 'NO_DATA'
 
+export interface ReorderRecommendation {
+  inventoryItemId: number
+  productId: number
+  productName: string
+  warehouseId: number
+  warehouseName: string
+  currentStock: number
+  daysOfCover: number | null
+  avgDailyDemand: number
+  demandStdDev: number
+  leadTimeDays: number
+  serviceLevel: number
+  safetyStock: number
+  reorderPoint: number
+  suggestedOrderQty: number
+  status: ReorderStatus
+  explanation: string
+}
 export interface Movement {
   id: number
   type?: string
@@ -235,7 +254,8 @@ export const api = {
       request<InventoryItem>('/inventory/adjustments', json('POST', data)),
     transfer: (data: { product_id: number; from_warehouse_id: number; to_warehouse_id: number; quantity: number }) =>
       request<InventoryItem[]>('/inventory/transfers', json('POST', data)),
-    
+    reorderRecommendations: () =>
+    request<ReorderRecommendation[]>('/api/stock/reorder-recommendations'),
     importInitialStock: (file: File) => {
       const formData = new FormData()
       formData.append('file', file)
